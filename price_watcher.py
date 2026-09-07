@@ -1,65 +1,19 @@
 import os
 import re
 import requests
-from bs4 import BeautifulSoup
 
 ASIN = "B0DGHWD7CT"
-MAX_PRICE = 99.00
-
 AMAZON_URL = f"https://www.amazon.it/dp/{ASIN}"
 
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
+def main():
+    print("==========================================")
+    print("AMAZON PRICE WATCHER - TEST 119")
+    print("==========================================")
+    print(f"ASIN: {ASIN}")
+    print(f"URL: {AMAZON_URL}")
+    print()
 
-def extract_prices(html):
-    """
-    Estrae tutti i possibili prezzi presenti nell'HTML
-    senza decidere quale sia quello corretto.
-    """
-
-    candidates = []
-
-    patterns = {
-        "priceAmount": r'"priceAmount"\s*:\s*([0-9]+(?:[.,][0-9]+)?)',
-        "price": r'"price"\s*:\s*"([0-9]+(?:[.,][0-9]+)?)"',
-        "price_whole": r'class="a-price-whole"[^>]*>([0-9]+)',
-        "offscreen": r'class="a-offscreen"[^>]*>\s*([0-9.,]+)\s*€',
-        "formatted_price": r'([0-9]{1,4}(?:[.,][0-9]{3})*(?:,[0-9]{1,2})?)\s*€',
-    }
-
-    for name, pattern in patterns.items():
-
-        matches = re.findall(pattern, html, re.IGNORECASE)
-
-        for value in matches:
-
-            value = value.replace(".", "").replace(",", ".")
-
-            try:
-                price = float(value)
-            except ValueError:
-                continue
-
-            if 1 <= price <= 10000:
-                candidates.append((name, price))
-
-    # Elimina duplicati mantenendo l'ordine
-    unique = []
-    seen = set()
-
-    for source, price in candidates:
-
-        key = (source, price)
-
-        if key not in seen:
-            seen.add(key)
-            unique.append((source, price))
-
-    return unique
-
-
-def get_amazon_page():
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (X11; Linux x86_64) "
@@ -74,78 +28,102 @@ def get_amazon_page():
         ),
     }
 
-    response = requests.get(
-        AMAZON_URL,
-        headers=headers,
-        timeout=30,
-    )
-
-    response.raise_for_status()
-
-    return response.text
-
-
-def main():
-
-    print("==========================================")
-    print("AMAZON PRICE WATCHER - DIAGNOSTICA")
-    print("==========================================")
-    print(f"ASIN: {ASIN}")
-    print(f"Soglia: {MAX_PRICE:.2f} €")
-    print(f"URL: {AMAZON_URL}")
-    print()
-
     try:
-        html = get_amazon_page()
+        response = requests.get(
+            AMAZON_URL,
+            headers=headers,
+            timeout=30,
+        )
+
+        response.raise_for_status()
 
     except Exception as e:
-        print(f"ERRORE AMAZON: {e}")
+        print(f"ERRORE: {e}")
         return
+
+    html = response.text
 
     print(f"HTML ricevuto: {len(html):,} caratteri")
     print()
 
-    # Titolo
-    soup = BeautifulSoup(html, "html.parser")
+    # Cerca esattamente 119 nel documento
+    patterns = [
+        r"119",
+        r"119[,.]00",
+        r"119[,.]0{1,2}",
+        r"119,00\s*€",
+        r"119\.00\s*€",
+        r"€\s*119",
+    ]
 
-    title = soup.select_one("#productTitle")
+    found = False
 
-    if title:
-        print("Titolo:")
-        print(title.get_text(" ", strip=True))
-    else:
-        print("Titolo non trovato.")
+    print("==========================================")
+    print("RICERCA PREZZO 119 €")
+    print("==========================================")
+
+    for pattern in patterns:
+
+        matches = list(re.finditer(pattern, html, re.IGNORECASE))
+
+        if matches:
+            found = True
+
+            print()
+            print(f"Pattern: {pattern}")
+            print(f"Occorrenze: {len(matches)}")
+
+            for match in matches[:10]:
+
+                start = max(0, match.start() - 180)
+                end = min(len(html), match.end() + 180)
+
+                context = html[start:end]
+
+                print("------------------------------------------")
+                print(context)
+
+    if not found:
+        print("❌ Il valore 119 non compare nell'HTML ricevuto da GitHub.")
 
     print()
     print("==========================================")
-    print("PREZZI TROVATI NELL'HTML")
+    print("RICERCA PREZZI AMAZON")
     print("==========================================")
 
-    candidates = extract_prices(html)
+    price_patterns = [
+        r'"priceAmount"\s*:\s*([0-9]+(?:[.,][0-9]+)?)',
+        r'"price"\s*:\s*"([0-9]+(?:[.,][0-9]+)?)"',
+        r'([0-9]{1,4}(?:[.,][0-9]{3})*(?:,[0-9]{1,2})?)\s*€',
+    ]
 
-    if not candidates:
-        print("Nessun prezzo trovato.")
-        return
+    prices = []
 
-    for source, price in candidates:
-        print(f"{source:20} -> {price:.2f} €")
+    for pattern in price_patterns:
 
-    print()
-    print("==========================================")
-    print("PREZZI UNICI")
-    print("==========================================")
+        matches = re.findall(pattern, html, re.IGNORECASE)
 
-    unique_prices = sorted(set(price for _, price in candidates))
+        for value in matches:
+
+            try:
+                value = value.replace(".", "").replace(",", ".")
+                price = float(value)
+
+                if 1 <= price <= 10000:
+                    prices.append(price)
+
+            except ValueError:
+                pass
+
+    unique_prices = sorted(set(prices))
 
     for price in unique_prices:
-        print(f"- {price:.2f} €")
+        print(f"{price:.2f} €")
 
     print()
     print("==========================================")
-    print("FINE DIAGNOSTICA")
+    print("FINE TEST")
     print("==========================================")
-    print("Nessun Telegram inviato.")
-    print("Nessun alert generato.")
 
 
 if __name__ == "__main__":
