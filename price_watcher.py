@@ -15,22 +15,11 @@ def parse_price(value):
     if not value:
         return None
 
-    value = value.strip()
-    value = value.replace("€", "").strip()
-
-    # Formato tipo 119.0
-    if "," not in value:
-        try:
-            price = float(value)
-            if 1 <= price <= 10000:
-                return price
-        except ValueError:
-            pass
-
-    # Formato tipo 119,00
-    value = value.replace(".", "").replace(",", ".")
+    value = value.strip().replace("€", "").strip()
 
     try:
+        if "," in value:
+            value = value.replace(".", "").replace(",", ".")
         price = float(value)
     except ValueError:
         return None
@@ -41,7 +30,7 @@ def parse_price(value):
     return None
 
 
-def get_amazon_data():
+def get_amazon_price():
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (X11; Linux x86_64) "
@@ -66,27 +55,13 @@ def get_amazon_data():
     response.raise_for_status()
 
     html = response.text
+
     print(f"HTML ricevuto: {len(html):,} caratteri")
 
-match = re.search(
-    r'id=["\']attach-base-product-price["\']\s+value=["\']([0-9.,]+)["\']',
-    html,
-    re.IGNORECASE,
-)
-
-if match:
-    print(f"🎯 attach-base-product-price trovato: {match.group(1)}")
-else:
-    print("❌ attach-base-product-price NON trovato")
-
-    # --------------------------------------------------
-    # METODO PRINCIPALE
-    # Amazon espone il prezzo base qui:
-    #
+    # Metodo principale:
     # <input type="hidden"
     #        id="attach-base-product-price"
     #        value="119.0" />
-    # --------------------------------------------------
 
     match = re.search(
         r'id=["\']attach-base-product-price["\']'
@@ -100,43 +75,15 @@ else:
 
         if price is not None:
             print(
-                "Prezzo trovato tramite "
+                "🎯 Prezzo trovato tramite "
                 "attach-base-product-price."
             )
-
             return price
 
-    # --------------------------------------------------
-    # FALLBACK
-    # Prezzo principale visualizzato:
-    #
-    # <span class="a-price ... apex-pricetopay-value">
-    #     <span class="a-offscreen">119,00€</span>
-    # --------------------------------------------------
+    print("❌ attach-base-product-price non trovato.")
 
-    match = re.search(
-        r'apex-pricetopay-value[^>]*>'
-        r'.{0,500}?'
-        r'<span[^>]*class=["\']a-offscreen["\'][^>]*>'
-        r'\s*([0-9.,]+)\s*€',
-        html,
-        re.IGNORECASE | re.DOTALL,
-    )
-
-    if match:
-        price = parse_price(match.group(1))
-
-        if price is not None:
-            print(
-                "Prezzo trovato tramite "
-                "apex-pricetopay-value."
-            )
-
-            return price
-
-    # --------------------------------------------------
-    # ULTIMO FALLBACK
-    # --------------------------------------------------
+    # Fallback:
+    # <span class="a-offscreen">119,00€</span>
 
     match = re.search(
         r'class=["\'][^"\']*a-offscreen[^"\']*["\']'
@@ -151,9 +98,8 @@ else:
         if price is not None:
             print(
                 "Prezzo trovato tramite "
-                "a-offscreen fallback."
+                "a-offscreen."
             )
-
             return price
 
     return None
@@ -178,7 +124,6 @@ def send_telegram(message):
 
 
 def main():
-
     print("==========================================")
     print("AMAZON PRICE WATCHER")
     print("==========================================")
@@ -188,7 +133,7 @@ def main():
     print()
 
     try:
-        price = get_amazon_data()
+        price = get_amazon_price()
 
     except Exception as e:
         print(f"Errore durante la lettura Amazon: {e}")
@@ -205,11 +150,10 @@ def main():
     print(f"🎯 Soglia: {MAX_PRICE:.2f} €")
 
     if price <= MAX_PRICE:
-
         message = (
             "🚨 PRICE WATCHER\n\n"
             "🔥 PREZZO SOTTO SOGLIA!\n\n"
-            f"📦 Apple AirPods 4\n"
+            "📦 Apple AirPods 4\n"
             f"💰 Prezzo: {price:.2f} €\n"
             f"🎯 Soglia: {MAX_PRICE:.2f} €\n\n"
             f"🛒 {AMAZON_URL}"
@@ -221,7 +165,6 @@ def main():
         print("✅ Telegram inviato.")
 
     else:
-
         print()
         print("❌ Prezzo sopra soglia.")
         print("Nessun Telegram.")
