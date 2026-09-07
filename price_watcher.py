@@ -1,6 +1,6 @@
 import os
 import re
-import requests
+from playwright.sync_api import sync_playwright
 
 ASIN = "B0DGHWD7CT"
 MAX_PRICE = 99.00
@@ -11,15 +11,22 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 
-def parse_price(value):
-    if not value:
+def parse_price(text):
+    if not text:
         return None
 
-    value = value.strip().replace("€", "").strip()
+    match = re.search(
+        r"(\d{1,4}(?:\.\d{3})*(?:,\d{1,2})?)",
+        text
+    )
+
+    if not match:
+        return None
+
+    value = match.group(1)
+    value = value.replace(".", "").replace(",", ".")
 
     try:
-        if "," in value:
-            value = value.replace(".", "").replace(",", ".")
         price = float(value)
     except ValueError:
         return None
@@ -31,81 +38,105 @@ def parse_price(value):
 
 
 def get_amazon_price():
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (X11; Linux x86_64) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/131.0.0.0 Safari/537.36"
-        ),
-        "Accept-Language": "it-IT,it;q=0.9",
-        "Accept": (
-            "text/html,application/xhtml+xml,"
-            "application/xml;q=0.9,image/avif,image/webp,"
-            "*/*;q=0.8"
-        ),
-    }
 
-    response = requests.get(
-        AMAZON_URL,
-        headers=headers,
-        timeout=30,
-    )
+    with sync_playwright() as p:
 
-    response.raise_for_status()
+        browser = p.chromium.launch(
+            headless=True
+        )
 
-    html = response.text
+        page = browser.new_page(
+            locale="it-IT",
+            user_agent=(
+                "Mozilla/5.0 (X11; Linux x86_64) "
+                "AppleWebKit/537.36 "
+                "(KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+        )
 
-    print(f"HTML ricevuto: {len(html):,} caratteri")
+        print("Apertura pagina Amazon...")
 
-    # Metodo principale:
-    # <input type="hidden"
-    #        id="attach-base-product-price"
-    #        value="119.0" />
+        page.goto(
+            AMAZON_URL,
+            wait_until="domcontentloaded",
+            timeout=60000,
+        )
 
-    match = re.search(
-        r'id=["\']attach-base-product-price["\']'
-        r'[^>]*value=["\']([0-9.,]+)["\']',
-        html,
-        re.IGNORECASE,
-    )
+        page.wait_for_timeout(5000)
 
-    if match:
-        price = parse_price(match.group(1))
+        print(f"Titolo pagina: {page.title()}")
 
-        if price is not None:
-            print(
-                "🎯 Prezzo trovato tramite "
-                "attach-base-product-price."
-            )
-            return price
+        # Prezzo principale visualizzato
+        selectors = [
+            ".apex-pricetopay-value .a-offscreen",
+            "#corePriceDisplay_desktop_feature_div .a-offscreen",
+            "#corePrice_feature_div .a-offscreen",
+            "#buybox .a-offscreen",
+            "#newBuyBoxPrice",
+        ]
 
-    print("❌ attach-base-product-price non trovato.")
+        for selector in selectors:
 
-    # Fallback:
-    # <span class="a-offscreen">119,00€</span>
+            try:
+                element = page.locator(selector).first
 
-    match = re.search(
-        r'class=["\'][^"\']*a-offscreen[^"\']*["\']'
-        r'[^>]*>\s*([0-9.,]+)\s*€',
-        html,
-        re.IGNORECASE,
-    )
+                if element.count() > 0:
 
-    if match:
-        price = parse_price(match.group(1))
+                    text = element.inner_text()
 
-        if price is not None:
-            print(
-                "Prezzo trovato tramite "
-                "a-offscreen."
-            )
-            return price
+                    print(
+                        f"Elemento trovato: {selector}"
+                    )
+                    print(
+                        f"Testo prezzo: {text}"
+                    )
 
-    return None
+                    price = parse_price(text)
+
+                    if price is not None:
+                        browser.close()
+                        return price
+
+            except Exception:
+                pass
+
+        # Fallback: cerca il prezzo base nel DOM
+        try:
+
+            element = page.locator(
+                "#attach-base-product-price"
+            ).first
+
+            if element.count() > 0:
+
+                value = element.get_attribute("value")
+
+                print(
+                    "attach-base-product-price:"
+                    f" {value}"
+                )
+
+                price = parse_price(value)
+
+                if price is not None:
+                    browser.close()
+                    return price
+
+        except Exception:
+            pass
+
+        print("Prezzo non trovato nella pagina.")
+
+        browser.close()
+
+        return None
 
 
 def send_telegram(message):
+
+    import requests
+
     url = (
         f"https://api.telegram.org/bot"
         f"{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -124,6 +155,7 @@ def send_telegram(message):
 
 
 def main():
+
     print("==========================================")
     print("AMAZON PRICE WATCHER")
     print("==========================================")
@@ -136,10 +168,11 @@ def main():
         price = get_amazon_price()
 
     except Exception as e:
-        print(f"Errore durante la lettura Amazon: {e}")
+        print(f"Errore: {e}")
         return
 
     if price is None:
+
         print()
         print("⚠️ PREZZO NON LEGGIBILE.")
         print("Nessun Telegram inviato.")
@@ -150,6 +183,7 @@ def main():
     print(f"🎯 Soglia: {MAX_PRICE:.2f} €")
 
     if price <= MAX_PRICE:
+
         message = (
             "🚨 PRICE WATCHER\n\n"
             "🔥 PREZZO SOTTO SOGLIA!\n\n"
@@ -161,11 +195,10 @@ def main():
 
         send_telegram(message)
 
-        print()
         print("✅ Telegram inviato.")
 
     else:
-        print()
+
         print("❌ Prezzo sopra soglia.")
         print("Nessun Telegram.")
 
