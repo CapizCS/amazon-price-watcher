@@ -5,7 +5,7 @@ import requests
 ASIN = "B0DGHWD7CT"
 MAX_PRICE = 99.00
 
-AMAZON_URL = f"https://www.amazon.it/dp/{ASIN}"
+AMAZON_URL = f"https://www.amazon.it/dp/{ASIN}?th=1"
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -66,6 +66,18 @@ def get_amazon_data():
     response.raise_for_status()
 
     html = response.text
+    print(f"HTML ricevuto: {len(html):,} caratteri")
+
+match = re.search(
+    r'id=["\']attach-base-product-price["\']\s+value=["\']([0-9.,]+)["\']',
+    html,
+    re.IGNORECASE,
+)
+
+if match:
+    print(f"🎯 attach-base-product-price trovato: {match.group(1)}")
+else:
+    print("❌ attach-base-product-price NON trovato")
 
     # --------------------------------------------------
     # METODO PRINCIPALE
