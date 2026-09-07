@@ -1,5 +1,6 @@
 import os
 import re
+import requests
 from playwright.sync_api import sync_playwright
 
 ASIN = "B0DGHWD7CT"
@@ -15,6 +16,8 @@ def parse_price(text):
     if not text:
         return None
 
+    text = text.strip().replace("€", "").strip()
+
     match = re.search(
         r"(\d{1,4}(?:\.\d{3})*(?:,\d{1,2})?)",
         text
@@ -24,7 +27,12 @@ def parse_price(text):
         return None
 
     value = match.group(1)
-    value = value.replace(".", "").replace(",", ".")
+
+    value = (
+        value
+        .replace(".", "")
+        .replace(",", ".")
+    )
 
     try:
         price = float(value)
@@ -67,19 +75,26 @@ def get_amazon_price():
 
         print(f"Titolo pagina: {page.title()}")
 
-        # Prezzo principale visualizzato
+        # ==========================================
+        # PREZZO PRINCIPALE VISIBILE
+        # ==========================================
+
         selectors = [
             ".apex-pricetopay-value .a-offscreen",
             "#corePriceDisplay_desktop_feature_div .a-offscreen",
             "#corePrice_feature_div .a-offscreen",
             "#buybox .a-offscreen",
+            "#buybox_feature_div .a-offscreen",
             "#newBuyBoxPrice",
         ]
 
         for selector in selectors:
 
             try:
-                element = page.locator(selector).first
+
+                element = page.locator(
+                    selector
+                ).first
 
                 if element.count() > 0:
 
@@ -88,6 +103,7 @@ def get_amazon_price():
                     print(
                         f"Elemento trovato: {selector}"
                     )
+
                     print(
                         f"Testo prezzo: {text}"
                     )
@@ -95,13 +111,22 @@ def get_amazon_price():
                     price = parse_price(text)
 
                     if price is not None:
+
                         browser.close()
+
                         return price
 
-            except Exception:
-                pass
+            except Exception as e:
 
-        # Fallback: cerca il prezzo base nel DOM
+                print(
+                    f"Errore selettore {selector}: {e}"
+                )
+
+        # ==========================================
+        # FALLBACK:
+        # attach-base-product-price
+        # ==========================================
+
         try:
 
             element = page.locator(
@@ -110,7 +135,9 @@ def get_amazon_price():
 
             if element.count() > 0:
 
-                value = element.get_attribute("value")
+                value = element.get_attribute(
+                    "value"
+                )
 
                 print(
                     "attach-base-product-price:"
@@ -120,13 +147,21 @@ def get_amazon_price():
                 price = parse_price(value)
 
                 if price is not None:
+
                     browser.close()
+
                     return price
 
-        except Exception:
-            pass
+        except Exception as e:
 
-        print("Prezzo non trovato nella pagina.")
+            print(
+                "Errore attach-base-product-price:"
+                f" {e}"
+            )
+
+        print(
+            "⚠️ Prezzo non trovato nella pagina."
+        )
 
         browser.close()
 
@@ -134,8 +169,6 @@ def get_amazon_price():
 
 
 def send_telegram(message):
-
-    import requests
 
     url = (
         f"https://api.telegram.org/bot"
@@ -159,28 +192,51 @@ def main():
     print("==========================================")
     print("AMAZON PRICE WATCHER")
     print("==========================================")
+
     print(f"ASIN: {ASIN}")
-    print(f"Soglia: {MAX_PRICE:.2f} €")
+    print(
+        f"Soglia: {MAX_PRICE:.2f} €"
+    )
     print(f"URL: {AMAZON_URL}")
     print()
 
     try:
+
         price = get_amazon_price()
 
     except Exception as e:
-        print(f"Errore: {e}")
+
+        print(
+            f"Errore durante la lettura Amazon: {e}"
+        )
+
         return
 
     if price is None:
 
         print()
-        print("⚠️ PREZZO NON LEGGIBILE.")
-        print("Nessun Telegram inviato.")
+        print(
+            "⚠️ PREZZO NON LEGGIBILE."
+        )
+
+        print(
+            "Nessun Telegram inviato."
+        )
+
         return
 
     print()
-    print(f"💰 Prezzo trovato: {price:.2f} €")
-    print(f"🎯 Soglia: {MAX_PRICE:.2f} €")
+    print(
+        f"💰 Prezzo trovato: {price:.2f} €"
+    )
+
+    print(
+        f"🎯 Soglia: {MAX_PRICE:.2f} €"
+    )
+
+    # ==========================================
+    # ALERT TELEGRAM
+    # ==========================================
 
     if price <= MAX_PRICE:
 
@@ -195,12 +251,21 @@ def main():
 
         send_telegram(message)
 
-        print("✅ Telegram inviato.")
+        print()
+        print(
+            "✅ Telegram inviato."
+        )
 
     else:
 
-        print("❌ Prezzo sopra soglia.")
-        print("Nessun Telegram.")
+        print()
+        print(
+            "❌ Prezzo sopra soglia."
+        )
+
+        print(
+            "Nessun Telegram."
+        )
 
 
 if __name__ == "__main__":
