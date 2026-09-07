@@ -1,14 +1,47 @@
+import os
+import re
 import requests
 
 ASIN = "B0DGHWD7CT"
+MAX_PRICE = 99.00
+
 AMAZON_URL = f"https://www.amazon.it/dp/{ASIN}"
 
+TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-def main():
-    print("==========================================")
-    print("AMAZON RESPONSE TEST")
-    print("==========================================")
 
+def parse_price(value):
+    if not value:
+        return None
+
+    value = value.strip()
+    value = value.replace("€", "").strip()
+
+    # Formato tipo 119.0
+    if "," not in value:
+        try:
+            price = float(value)
+            if 1 <= price <= 10000:
+                return price
+        except ValueError:
+            pass
+
+    # Formato tipo 119,00
+    value = value.replace(".", "").replace(",", ".")
+
+    try:
+        price = float(value)
+    except ValueError:
+        return None
+
+    if 1 <= price <= 10000:
+        return price
+
+    return None
+
+
+def get_amazon_data():
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (X11; Linux x86_64) "
@@ -17,32 +50,169 @@ def main():
             "Chrome/131.0.0.0 Safari/537.36"
         ),
         "Accept-Language": "it-IT,it;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,"
-                  "application/xml;q=0.9,*/*;q=0.8",
+        "Accept": (
+            "text/html,application/xhtml+xml,"
+            "application/xml;q=0.9,image/avif,image/webp,"
+            "*/*;q=0.8"
+        ),
     }
 
     response = requests.get(
         AMAZON_URL,
         headers=headers,
         timeout=30,
-        allow_redirects=True,
     )
 
-    print(f"HTTP status: {response.status_code}")
-    print(f"URL finale: {response.url}")
-    print(f"Dimensione HTML: {len(response.text):,} caratteri")
+    response.raise_for_status()
+
+    html = response.text
+
+    # --------------------------------------------------
+    # METODO PRINCIPALE
+    # Amazon espone il prezzo base qui:
+    #
+    # <input type="hidden"
+    #        id="attach-base-product-price"
+    #        value="119.0" />
+    # --------------------------------------------------
+
+    match = re.search(
+        r'id=["\']attach-base-product-price["\']'
+        r'[^>]*value=["\']([0-9.,]+)["\']',
+        html,
+        re.IGNORECASE,
+    )
+
+    if match:
+        price = parse_price(match.group(1))
+
+        if price is not None:
+            print(
+                "Prezzo trovato tramite "
+                "attach-base-product-price."
+            )
+
+            return price
+
+    # --------------------------------------------------
+    # FALLBACK
+    # Prezzo principale visualizzato:
+    #
+    # <span class="a-price ... apex-pricetopay-value">
+    #     <span class="a-offscreen">119,00€</span>
+    # --------------------------------------------------
+
+    match = re.search(
+        r'apex-pricetopay-value[^>]*>'
+        r'.{0,500}?'
+        r'<span[^>]*class=["\']a-offscreen["\'][^>]*>'
+        r'\s*([0-9.,]+)\s*€',
+        html,
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    if match:
+        price = parse_price(match.group(1))
+
+        if price is not None:
+            print(
+                "Prezzo trovato tramite "
+                "apex-pricetopay-value."
+            )
+
+            return price
+
+    # --------------------------------------------------
+    # ULTIMO FALLBACK
+    # --------------------------------------------------
+
+    match = re.search(
+        r'class=["\'][^"\']*a-offscreen[^"\']*["\']'
+        r'[^>]*>\s*([0-9.,]+)\s*€',
+        html,
+        re.IGNORECASE,
+    )
+
+    if match:
+        price = parse_price(match.group(1))
+
+        if price is not None:
+            print(
+                "Prezzo trovato tramite "
+                "a-offscreen fallback."
+            )
+
+            return price
+
+    return None
+
+
+def send_telegram(message):
+    url = (
+        f"https://api.telegram.org/bot"
+        f"{TELEGRAM_BOT_TOKEN}/sendMessage"
+    )
+
+    response = requests.post(
+        url,
+        data={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+        },
+        timeout=30,
+    )
+
+    response.raise_for_status()
+
+
+def main():
+
+    print("==========================================")
+    print("AMAZON PRICE WATCHER")
+    print("==========================================")
+    print(f"ASIN: {ASIN}")
+    print(f"Soglia: {MAX_PRICE:.2f} €")
+    print(f"URL: {AMAZON_URL}")
     print()
 
-    print("==========================================")
-    print("INIZIO RISPOSTA AMAZON")
-    print("==========================================")
+    try:
+        price = get_amazon_data()
 
-    print(response.text[:3000])
+    except Exception as e:
+        print(f"Errore durante la lettura Amazon: {e}")
+        return
+
+    if price is None:
+        print()
+        print("⚠️ PREZZO NON LEGGIBILE.")
+        print("Nessun Telegram inviato.")
+        return
 
     print()
-    print("==========================================")
-    print("FINE TEST")
-    print("==========================================")
+    print(f"💰 Prezzo trovato: {price:.2f} €")
+    print(f"🎯 Soglia: {MAX_PRICE:.2f} €")
+
+    if price <= MAX_PRICE:
+
+        message = (
+            "🚨 PRICE WATCHER\n\n"
+            "🔥 PREZZO SOTTO SOGLIA!\n\n"
+            f"📦 Apple AirPods 4\n"
+            f"💰 Prezzo: {price:.2f} €\n"
+            f"🎯 Soglia: {MAX_PRICE:.2f} €\n\n"
+            f"🛒 {AMAZON_URL}"
+        )
+
+        send_telegram(message)
+
+        print()
+        print("✅ Telegram inviato.")
+
+    else:
+
+        print()
+        print("❌ Prezzo sopra soglia.")
+        print("Nessun Telegram.")
 
 
 if __name__ == "__main__":
