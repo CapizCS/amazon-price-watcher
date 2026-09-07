@@ -12,36 +12,54 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 
-def parse_price(text):
-    if not text:
-        return None
+def extract_prices(html):
+    """
+    Estrae tutti i possibili prezzi presenti nell'HTML
+    senza decidere quale sia quello corretto.
+    """
 
-    text = text.replace("\xa0", " ").strip()
+    candidates = []
 
-    # Esempi:
-    # 119,00 €
-    # 119 €
-    # €119,00
-    match = re.search(r"(\d{1,4}(?:[.\s]\d{3})*(?:,\d{1,2})?)", text)
+    patterns = {
+        "priceAmount": r'"priceAmount"\s*:\s*([0-9]+(?:[.,][0-9]+)?)',
+        "price": r'"price"\s*:\s*"([0-9]+(?:[.,][0-9]+)?)"',
+        "price_whole": r'class="a-price-whole"[^>]*>([0-9]+)',
+        "offscreen": r'class="a-offscreen"[^>]*>\s*([0-9.,]+)\s*€',
+        "formatted_price": r'([0-9]{1,4}(?:[.,][0-9]{3})*(?:,[0-9]{1,2})?)\s*€',
+    }
 
-    if not match:
-        return None
+    for name, pattern in patterns.items():
 
-    value = match.group(1)
-    value = value.replace(" ", "").replace(".", "").replace(",", ".")
+        matches = re.findall(pattern, html, re.IGNORECASE)
 
-    try:
-        price = float(value)
-    except ValueError:
-        return None
+        for value in matches:
 
-    if 1 <= price <= 10000:
-        return price
+            value = value.replace(".", "").replace(",", ".")
 
-    return None
+            try:
+                price = float(value)
+            except ValueError:
+                continue
+
+            if 1 <= price <= 10000:
+                candidates.append((name, price))
+
+    # Elimina duplicati mantenendo l'ordine
+    unique = []
+    seen = set()
+
+    for source, price in candidates:
+
+        key = (source, price)
+
+        if key not in seen:
+            seen.add(key)
+            unique.append((source, price))
+
+    return unique
 
 
-def get_amazon_data():
+def get_amazon_page():
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (X11; Linux x86_64) "
@@ -64,101 +82,13 @@ def get_amazon_data():
 
     response.raise_for_status()
 
-    soup = BeautifulSoup(response.text, "html.parser")
-
-    title = None
-
-    title_element = soup.select_one("#productTitle")
-
-    if title_element:
-        title = title_element.get_text(" ", strip=True)
-
-    # Cerchiamo prima i contenitori del prezzo principale/acquistabile.
-    selectors = [
-        "#corePriceDisplay_desktop_feature_div .a-price .a-offscreen",
-        "#corePrice_feature_div .a-price .a-offscreen",
-        "#apex_desktop .a-price .a-offscreen",
-        "#buybox .a-price .a-offscreen",
-        "#buybox_feature_div .a-price .a-offscreen",
-        "#newBuyBoxPrice",
-        "#priceblock_ourprice",
-        "#priceblock_dealprice",
-        ".priceToPay .a-offscreen",
-    ]
-
-    checked = []
-
-    for selector in selectors:
-        elements = soup.select(selector)
-
-        for element in elements:
-            text = element.get_text(" ", strip=True)
-            checked.append((selector, text))
-
-            price = parse_price(text)
-
-            if price is not None:
-                return price, title
-
-    # Seconda ricerca più prudente.
-    # Cerchiamo il prezzo dentro la zona principale del prodotto,
-    # evitando di prendere automaticamente il primo prezzo dell'intera pagina.
-
-    containers = [
-        soup.select_one("#corePriceDisplay_desktop_feature_div"),
-        soup.select_one("#corePrice_feature_div"),
-        soup.select_one("#buybox"),
-        soup.select_one("#buybox_feature_div"),
-        soup.select_one("#apex_desktop"),
-    ]
-
-    for container in containers:
-        if not container:
-            continue
-
-        elements = container.select(".a-price .a-offscreen")
-
-        for element in elements:
-            text = element.get_text(" ", strip=True)
-            checked.append(("container", text))
-
-            price = parse_price(text)
-
-            if price is not None:
-                return price, title
-
-    print("Prezzo non trovato nei selettori principali.")
-
-    if checked:
-        print("Prezzi rilevati durante la ricerca:")
-
-        for selector, text in checked[:20]:
-            print(f"  {selector}: {text}")
-
-    return None, title
-
-
-def send_telegram(message):
-    url = (
-        f"https://api.telegram.org/bot"
-        f"{TELEGRAM_BOT_TOKEN}/sendMessage"
-    )
-
-    response = requests.post(
-        url,
-        data={
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message,
-        },
-        timeout=30,
-    )
-
-    response.raise_for_status()
+    return response.text
 
 
 def main():
+
     print("==========================================")
-    print("AMAZON PRICE WATCHER")
+    print("AMAZON PRICE WATCHER - DIAGNOSTICA")
     print("==========================================")
     print(f"ASIN: {ASIN}")
     print(f"Soglia: {MAX_PRICE:.2f} €")
@@ -166,42 +96,56 @@ def main():
     print()
 
     try:
-        price, title = get_amazon_data()
+        html = get_amazon_page()
 
     except Exception as e:
-        print(f"Errore durante la lettura Amazon: {e}")
+        print(f"ERRORE AMAZON: {e}")
         return
 
-    if price is None:
-        print()
-        print("⚠️ PREZZO NON LEGGIBILE.")
-        print("Nessun Telegram inviato.")
-        return
+    print(f"HTML ricevuto: {len(html):,} caratteri")
+    print()
 
-    print(f"Titolo: {title or 'Non disponibile'}")
-    print(f"Prezzo trovato: {price:.2f} €")
-    print(f"Soglia: {MAX_PRICE:.2f} €")
+    # Titolo
+    soup = BeautifulSoup(html, "html.parser")
 
-    if price <= MAX_PRICE:
+    title = soup.select_one("#productTitle")
 
-        message = (
-            "🚨 PRICE WATCHER\n\n"
-            "🔥 PREZZO SOTTO SOGLIA!\n\n"
-            f"📦 {title or ASIN}\n"
-            f"💰 Prezzo: {price:.2f} €\n"
-            f"🎯 Soglia: {MAX_PRICE:.2f} €\n\n"
-            f"🛒 {AMAZON_URL}"
-        )
-
-        send_telegram(message)
-
-        print()
-        print("✅ Telegram inviato.")
-
+    if title:
+        print("Titolo:")
+        print(title.get_text(" ", strip=True))
     else:
-        print()
-        print("❌ Prezzo sopra soglia.")
-        print("Nessun Telegram.")
+        print("Titolo non trovato.")
+
+    print()
+    print("==========================================")
+    print("PREZZI TROVATI NELL'HTML")
+    print("==========================================")
+
+    candidates = extract_prices(html)
+
+    if not candidates:
+        print("Nessun prezzo trovato.")
+        return
+
+    for source, price in candidates:
+        print(f"{source:20} -> {price:.2f} €")
+
+    print()
+    print("==========================================")
+    print("PREZZI UNICI")
+    print("==========================================")
+
+    unique_prices = sorted(set(price for _, price in candidates))
+
+    for price in unique_prices:
+        print(f"- {price:.2f} €")
+
+    print()
+    print("==========================================")
+    print("FINE DIAGNOSTICA")
+    print("==========================================")
+    print("Nessun Telegram inviato.")
+    print("Nessun alert generato.")
 
 
 if __name__ == "__main__":
